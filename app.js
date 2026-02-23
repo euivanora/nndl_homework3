@@ -1,5 +1,5 @@
 // ==========================================
-// GRADIENT PUZZLE — ACTUALLY WORKING
+// GRADIENT PUZZLE — LEFT → RIGHT VERSION
 // ==========================================
 
 const SIZE = 16;
@@ -21,41 +21,45 @@ let state = {
 };
 
 // ==========================================
-// LOSS FUNCTIONS
+// BASIC LOSS
 // ==========================================
 
 function mse(a, b) {
   return tf.mean(tf.square(a.sub(b)));
 }
 
-// ---- Differentiable Histogram Constraint ----
-// Preserve mean and variance instead of sorting
+// Preserve distribution (mean + variance)
 function distributionLoss(x, y) {
-
-  const meanX = tf.mean(x);
-  const meanY = tf.mean(y);
-
-  const varX = tf.moments(x).variance;
-  const varY = tf.moments(y).variance;
-
-  const meanLoss = tf.square(meanX.sub(meanY));
-  const varLoss = tf.square(varX.sub(varY));
-
+  const meanLoss = tf.square(tf.mean(x).sub(tf.mean(y)));
+  const varLoss = tf.square(
+    tf.moments(x).variance.sub(tf.moments(y).variance)
+  );
   return meanLoss.add(varLoss);
 }
 
-// Smoothness
+// ==========================================
+// SHAPE CONSTRAINTS
+// ==========================================
+
+// Total Variation (horizontal smoothness)
 function smoothness(y) {
   const dx = y.slice([0, 0, 0, 0], [-1, -1, SIZE - 1, -1])
     .sub(y.slice([0, 0, 1, 0], [-1, -1, SIZE - 1, -1]));
+
   return tf.mean(tf.square(dx));
 }
 
-// Direction
+// Direction: right brighter than left
 function directionX(y) {
-  const mask = tf.linspace(-1, 1, SIZE)
-    .reshape([1, 1, SIZE, 1]);
-  return tf.mean(y.mul(mask)).mul(-1);
+
+  const left = y.slice([0, 0, 0, 0], [-1, -1, SIZE / 2, -1]);
+  const right = y.slice([0, 0, SIZE / 2, 0], [-1, -1, SIZE / 2, -1]);
+
+  const meanLeft = tf.mean(left);
+  const meanRight = tf.mean(right);
+
+  // Loss decreases when right > left
+  return meanLeft.sub(meanRight);
 }
 
 // ==========================================
@@ -109,11 +113,13 @@ function trainStep() {
 
   tf.tidy(() => {
 
+    // Baseline autoencoder
     state.optBase.minimize(() => {
       const y = state.baseline.predict(state.x);
       return mse(state.x, y);
     }, false, state.baseline.trainableWeights.map(w => w.val));
 
+    // Student with shape constraints
     state.optStudent.minimize(() => {
       const y = state.student.predict(state.x);
       return studentLoss(state.x, y);
@@ -128,7 +134,7 @@ function trainStep() {
 }
 
 // ==========================================
-// SCALING FIX
+// RENDER (16 → 320 scaling)
 // ==========================================
 
 async function drawTensorScaled(tensor, canvas) {
