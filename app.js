@@ -1,306 +1,227 @@
-// app.js - ПОЛНОСТЬЮ РАБОЧАЯ ВЕРСИЯ
-// Версия: 2024-01-15-FIXED
+// ==========================================
+// CONFIG
+// ==========================================
 
-const IMG_SIZE = 16;
-const LEARNING_RATE = 0.01;
+const SIZE = 16;
+const SHAPE_DATA = [1, SIZE, SIZE, 1];
+const SHAPE_MODEL = [SIZE, SIZE, 1];
 
-let inputTensor = null;
-let baselineModel = null;
-let studentModel = null;
-let optimizerBaseline = null;
-let optimizerStudent = null;
-let isAutoTraining = false;
-let stepCount = 0;
-let autoTrainId = null;
-
-const ui = {
-    log: document.getElementById('logBox'),
-    canvasInput: document.getElementById('canvasInput'),
-    canvasBaseline: document.getElementById('canvasBaseline'),
-    canvasStudent: document.getElementById('canvasStudent'),
-    btnTrain: document.getElementById('btnTrainStep'),
-    btnAuto: document.getElementById('btnAutoTrain'),
-    btnReset: document.getElementById('btnReset'),
-    selectArch: document.getElementById('selectArch'),
-    rangeSmooth: document.getElementById('rangeSmooth'),
-    rangeDir: document.getElementById('rangeDir'),
-    valSmooth: document.getElementById('valSmooth'),
-    valDir: document.getElementById('valDir')
+const CONFIG = {
+  lr: 0.03,
+  autoSpeed: 40
 };
 
-function log(msg) {
-    ui.log.innerHTML += `> ${msg}<br>`;
-    ui.log.scrollTop = ui.log.scrollHeight;
-    console.log(msg);
+let state = {
+  step: 0,
+  auto: false,
+  xInput: null,
+  baseline: null,
+  student: null,
+  optBase: null,
+  optStudent: null
+};
+
+// ==========================================
+// LOSS COMPONENTS
+// ==========================================
+
+function mse(a, b) {
+  return tf.losses.meanSquaredError(a, b).mean();
 }
 
-function generateFixedNoise() {
-    if (inputTensor) inputTensor.dispose();
-    inputTensor = tf.randomUniform([1, IMG_SIZE, IMG_SIZE, 1]);
-    log("Noise generated");
+// --- Level 2: Sorted MSE (Histogram constraint)
+function sortedMSE(a, b) {
+  const aFlat = a.reshape([SIZE * SIZE]);
+  const bFlat = b.reshape([SIZE * SIZE]);
+
+  const aSorted = tf.sort(aFlat);
+  const bSorted = tf.sort(bFlat);
+
+  return mse(aSorted, bSorted);
 }
 
-function createBaselineModel() {
-    const model = tf.sequential();
-    model.add(tf.layers.flatten({inputShape: [IMG_SIZE, IMG_SIZE, 1]}));
-    model.add(tf.layers.dense({units: 128, activation: 'relu'}));
-    model.add(tf.layers.dense({units: 128, activation: 'relu'}));
-    model.add(tf.layers.dense({units: IMG_SIZE * IMG_SIZE, activation: 'sigmoid'}));
-    model.add(tf.layers.reshape({targetShape: [IMG_SIZE, IMG_SIZE, 1]}));
-    return model;
+// --- Level 3: Smoothness (Total Variation)
+function smoothness(y) {
+  const dx = y.slice([0,0,0,0],[-1,-1,SIZE-1,-1])
+    .sub(y.slice([0,0,1,0],[-1,-1,SIZE-1,-1]));
+
+  const dy = y.slice([0,0,0,0],[-1,SIZE-1,-1,-1])
+    .sub(y.slice([0,1,0,0],[-1,SIZE-1,-1,-1]));
+
+  return tf.mean(tf.square(dx)).add(tf.mean(tf.square(dy)));
 }
 
-function createStudentModel(archType) {
-    const model = tf.sequential();
-    model.add(tf.layers.flatten({inputShape: [IMG_SIZE, IMG_SIZE, 1]}));
-    
-    let hiddenUnits = 128;
-    const inputSize = IMG_SIZE * IMG_SIZE;
-    
-    if (archType === 'compression') {
-        hiddenUnits = 32;
-    } else if (archType === 'transformation') {
-        hiddenUnits = inputSize;
-    } else if (archType === 'expansion') {
-        hiddenUnits = 512;
-    }
-    
-    model.add(tf.layers.dense({units: hiddenUnits, activation: 'relu'}));
-    model.add(tf.layers.dense({units: hiddenUnits, activation: 'relu'}));
-    model.add(tf.layers.dense({units: inputSize, activation: 'sigmoid'}));
-    model.add(tf.layers.reshape({targetShape: [IMG_SIZE, IMG_SIZE, 1]}));
-    
-    return model;
+// --- Direction: left dark, right bright
+function directionX(y) {
+  const mask = tf.linspace(-1,1,SIZE)
+    .reshape([1,1,SIZE,1]);
+
+  return tf.mean(y.mul(mask)).mul(-1);
 }
 
-function createModels() {
-    if (baselineModel) baselineModel.dispose();
-    if (studentModel) studentModel.dispose();
-    if (optimizerBaseline) optimizerBaseline.dispose();
-    if (optimizerStudent) optimizerStudent.dispose();
-    
-    baselineModel = createBaselineModel();
-    studentModel = createStudentModel(ui.selectArch.value);
-    optimizerBaseline = tf.train.adam(LEARNING_RATE);
-    optimizerStudent = tf.train.adam(LEARNING_RATE);
-    stepCount = 0;
-    
-    log(`Models created: ${ui.selectArch.value}`);
+// ==========================================
+// MODELS
+// ==========================================
+
+function createBaseline() {
+  const m = tf.sequential();
+  m.add(tf.layers.flatten({inputShape: SHAPE_MODEL}));
+  m.add(tf.layers.dense({units:64, activation:'relu'}));
+  m.add(tf.layers.dense({units:256, activation:'sigmoid'}));
+  m.add(tf.layers.reshape({targetShape:[SIZE,SIZE,1]}));
+  return m;
 }
 
-function mseLoss(yTrue, yPred) {
-    return tf.losses.meanSquaredError(yTrue, yPred);
+function createStudent(type) {
+  const m = tf.sequential();
+  m.add(tf.layers.flatten({inputShape: SHAPE_MODEL}));
+
+  // TODO-A: Projection Types
+
+  if(type==="compression"){
+    m.add(tf.layers.dense({units:64, activation:'relu'}));
+    m.add(tf.layers.dense({units:256, activation:'sigmoid'}));
+  }
+  else if(type==="transformation"){
+    // 1:1 projection (Mission mode)
+    m.add(tf.layers.dense({units:256, activation:'relu'}));
+    m.add(tf.layers.dense({units:256, activation:'sigmoid'}));
+  }
+  else if(type==="expansion"){
+    m.add(tf.layers.dense({units:512, activation:'relu'}));
+    m.add(tf.layers.dense({units:256, activation:'sigmoid'}));
+  }
+
+  m.add(tf.layers.reshape({targetShape:[SIZE,SIZE,1]}));
+  return m;
 }
 
-// ИСПРАВЛЕНО: используем tf.topk вместо tf.sort
-function sortedMseLoss(yTrue, yPred) {
-    const totalElements = IMG_SIZE * IMG_SIZE;
-    
-    const flatTrue = yTrue.flatten();
-    const flatPred = yPred.flatten();
-    
-    // tf.topk возвращает отсортированные значения (по убыванию)
-    const sortedTrue = tf.topk(flatTrue, totalElements).values;
-    const sortedPred = tf.topk(flatPred, totalElements).values;
-    
-    const loss = tf.losses.meanSquaredError(sortedTrue, sortedPred);
-    
-    flatTrue.dispose();
-    flatPred.dispose();
-    sortedTrue.dispose();
-    sortedPred.dispose();
-    
-    return loss;
+// ==========================================
+// STUDENT LOSS (Intent Architect)
+// ==========================================
+
+function studentLoss(x, yPred) {
+  return tf.tidy(()=>{
+
+    // Level 2 constraint
+    const lossSorted = sortedMSE(x, yPred);
+
+    const l1 = parseFloat(document.getElementById("smoothRange").value);
+    const l2 = parseFloat(document.getElementById("dirRange").value);
+
+    const lossSmooth = smoothness(yPred).mul(l1);
+    const lossDir = directionX(yPred).mul(l2);
+
+    return lossSorted.add(lossSmooth).add(lossDir);
+  });
 }
 
-function smoothnessLoss(yPred) {
-    const shiftedRight = tf.pad(yPred, [[0,0], [0,0], [1,0], [0,0]], 'constant').slice([0,0,0,0], [-1,-1,-1,-1]);
-    const shiftedDown = tf.pad(yPred, [[0,0], [1,0], [0,0], [0,0]], 'constant').slice([0,0,0,0], [-1,-1,-1,-1]);
-    const diffX = tf.sub(yPred, shiftedRight);
-    const diffY = tf.sub(yPred, shiftedDown);
-    const tv = tf.square(diffX).add(tf.square(diffY)).mean();
-    shiftedRight.dispose();
-    shiftedDown.dispose();
-    diffX.dispose();
-    diffY.dispose();
-    return tv;
+// ==========================================
+// TRAINING
+// ==========================================
+
+function trainStep(){
+
+  state.step++;
+
+  const baseLoss = tf.tidy(()=>{
+    const {value, grads} = tf.variableGrads(()=>{
+      const y = state.baseline.predict(state.xInput);
+      return mse(state.xInput,y);
+    });
+    state.optBase.applyGradients(grads);
+    return value.dataSync()[0];
+  });
+
+  const studentLossVal = tf.tidy(()=>{
+    const {value, grads} = tf.variableGrads(()=>{
+      const y = state.student.predict(state.xInput);
+      return studentLoss(state.xInput,y);
+    });
+    state.optStudent.applyGradients(grads);
+    return value.dataSync()[0];
+  });
+
+  log(`Step ${state.step} | Base=${baseLoss.toFixed(4)} | Student=${studentLossVal.toFixed(4)}`);
+
+  if(state.step % 5===0) render();
 }
 
-function directionLoss(yPred) {
-    const maskData = new Float32Array(IMG_SIZE * IMG_SIZE);
-    for (let i = 0; i < IMG_SIZE * IMG_SIZE; i++) {
-        const x = i % IMG_SIZE;
-        maskData[i] = (x / (IMG_SIZE - 1)) * 2 - 1;
-    }
-    const mask = tf.tensor4d(maskData, [1, IMG_SIZE, IMG_SIZE, 1]);
-    const weighted = tf.mul(yPred, mask);
-    const loss = tf.neg(weighted.mean());
-    mask.dispose();
-    weighted.dispose();
-    return loss;
+// ==========================================
+// RENDER
+// ==========================================
+
+async function render(){
+  const base = state.baseline.predict(state.xInput);
+  const stud = state.student.predict(state.xInput);
+
+  await tf.browser.toPixels(state.xInput.squeeze(), document.getElementById("inputCanvas"));
+  await tf.browser.toPixels(base.squeeze(), document.getElementById("baseCanvas"));
+  await tf.browser.toPixels(stud.squeeze(), document.getElementById("studentCanvas"));
+
+  base.dispose();
+  stud.dispose();
 }
 
-function calculateStudentLoss(yTrue, yPred) {
-    const lambdaSmooth = parseFloat(ui.rangeSmooth.value);
-    const lambdaDir = parseFloat(ui.rangeDir.value);
-    
-    let loss = sortedMseLoss(yTrue, yPred);
-    
-    if (lambdaSmooth > 0) {
-        const smoothTerm = smoothnessLoss(yPred);
-        loss = tf.add(loss, tf.mul(smoothTerm, lambdaSmooth));
-    }
-    
-    if (lambdaDir > 0) {
-        const dirTerm = directionLoss(yPred);
-        loss = tf.add(loss, tf.mul(dirTerm, lambdaDir));
-    }
-    
-    return loss;
+// ==========================================
+// UI
+// ==========================================
+
+function log(msg){
+  const el=document.getElementById("log");
+  el.innerHTML = "> "+msg+"<br>"+el.innerHTML;
 }
 
-function drawTensor(canvas, tensor) {
-    const data = tensor.dataSync();
-    const ctx = canvas.getContext('2d');
-    const imgData = ctx.createImageData(IMG_SIZE, IMG_SIZE);
-    
-    for (let i = 0; i < data.length; i++) {
-        const val = Math.floor(data[i] * 255);
-        const idx = i * 4;
-        imgData.data[idx] = val;
-        imgData.data[idx + 1] = val;
-        imgData.data[idx + 2] = val;
-        imgData.data[idx + 3] = 255;
-    }
-    
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = IMG_SIZE;
-    tempCanvas.height = IMG_SIZE;
-    tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
-    
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
-}
+function init(){
 
-async function trainStep() {
-    try {
-        tf.tidy(() => {
-            optimizerBaseline.minimize(() => {
-                const pred = baselineModel.predict(inputTensor);
-                return mseLoss(inputTensor, pred);
-            }, baselineModel.trainableWeights);
-            
-            optimizerStudent.minimize(() => {
-                const pred = studentModel.predict(inputTensor);
-                return calculateStudentLoss(inputTensor, pred);
-            }, studentModel.trainableWeights);
-        });
-        
-        stepCount++;
-        if (stepCount % 10 === 0) {
-            updateVisuals();
-        }
-    } catch (err) {
-        log(`ERROR: ${err.message}`);
-        console.error(err);
-        stopAutoTrain();
-    }
-}
+  state.xInput = tf.randomUniform(SHAPE_DATA);
 
-function updateVisuals() {
-    try {
-        const baseOut = baselineModel.predict(inputTensor);
-        const studOut = studentModel.predict(inputTensor);
-        
-        drawTensor(ui.canvasBaseline, baseOut);
-        drawTensor(ui.canvasStudent, studOut);
-        
-        const baseLoss = mseLoss(inputTensor, baseOut).dataSync()[0].toFixed(4);
-        const studLoss = calculateStudentLoss(inputTensor, studOut).dataSync()[0].toFixed(4);
-        
-        log(`Step ${stepCount} | Base: ${baseLoss} | Student: ${studLoss}`);
-        
-        baseOut.dispose();
-        studOut.dispose();
-    } catch (err) {
-        log(`Visual ERROR: ${err.message}`);
-    }
-}
+  resetModels();
 
-function stopAutoTrain() {
-    isAutoTraining = false;
-    ui.btnAuto.textContent = "Auto Train (Start)";
-    ui.btnAuto.classList.remove('danger');
-    if (autoTrainId) {
-        cancelAnimationFrame(autoTrainId);
-        autoTrainId = null;
-    }
-}
+  document.getElementById("btnTrain").onclick=trainStep;
 
-function startAutoTrain() {
-    isAutoTraining = true;
-    ui.btnAuto.textContent = "Auto Train (Stop)";
-    ui.btnAuto.classList.add('danger');
-    
-    function loop() {
-        if (!isAutoTraining) return;
-        trainStep();
-        autoTrainId = requestAnimationFrame(loop);
-    }
+  document.getElementById("btnAuto").onclick=()=>{
+    state.auto=!state.auto;
+    document.getElementById("btnAuto").innerText=
+      state.auto?"Auto Train (Stop)":"Auto Train (Start)";
     loop();
+  };
+
+  document.getElementById("btnReset").onclick=resetModels;
+
+  document.getElementById("archSelect").onchange=resetModels;
+
+  document.getElementById("smoothRange").oninput=e=>{
+    document.getElementById("valSmooth").innerText=e.target.value;
+  };
+
+  document.getElementById("dirRange").oninput=e=>{
+    document.getElementById("valDir").innerText=e.target.value;
+  };
+
+  render();
 }
 
-async function init() {
-    try {
-        log("Loading TensorFlow.js...");
-        await tf.ready();
-        log(`TF.js version: ${tf.version.tfjs}`);
-        
-        generateFixedNoise();
-        createModels();
-        
-        drawTensor(ui.canvasInput, inputTensor);
-        drawTensor(ui.canvasBaseline, baselineModel.predict(inputTensor));
-        drawTensor(ui.canvasStudent, studentModel.predict(inputTensor));
-        
-        log("✓ Ready! Click Train to start");
-    } catch (err) {
-        log(`FATAL ERROR: ${err.message}`);
-        console.error(err);
-    }
+function resetModels(){
+
+  if(state.baseline) state.baseline.dispose();
+  if(state.student) state.student.dispose();
+
+  state.baseline=createBaseline();
+  state.student=createStudent(document.getElementById("archSelect").value);
+
+  state.optBase=tf.train.adam(CONFIG.lr);
+  state.optStudent=tf.train.adam(CONFIG.lr);
+
+  state.step=0;
+  log("Models Reset.");
+  render();
 }
 
-ui.btnTrain.addEventListener('click', () => {
-    trainStep();
-    updateVisuals();
-});
-
-ui.btnAuto.addEventListener('click', () => {
-    if (isAutoTraining) {
-        stopAutoTrain();
-    } else {
-        startAutoTrain();
-    }
-});
-
-ui.btnReset.addEventListener('click', () => {
-    stopAutoTrain();
-    generateFixedNoise();
-    createModels();
-    drawTensor(ui.canvasInput, inputTensor);
-    drawTensor(ui.canvasBaseline, baselineModel.predict(inputTensor));
-    drawTensor(ui.canvasStudent, studentModel.predict(inputTensor));
-    log("Reset complete");
-});
-
-ui.selectArch.addEventListener('change', () => {
-    stopAutoTrain();
-    createModels();
-    updateVisuals();
-});
-
-ui.rangeSmooth.addEventListener('input', (e) => ui.valSmooth.textContent = e.target.value);
-ui.rangeDir.addEventListener('input', (e) => ui.valDir.textContent = e.target.value);
+function loop(){
+  if(!state.auto) return;
+  trainStep();
+  setTimeout(loop, CONFIG.autoSpeed);
+}
 
 init();
