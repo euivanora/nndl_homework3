@@ -96,16 +96,30 @@ function mseLoss(yTrue, yPred) {
     return tf.losses.meanSquaredError(yTrue, yPred);
 }
 
+/**
+ * FIXED: Using tf.topk instead of tf.sort (which doesn't exist in TF.js)
+ * topk with k=all elements gives us sorted values
+ */
 function sortedMseLoss(yTrue, yPred) {
+    const totalElements = IMG_SIZE * IMG_SIZE;
+    
+    // Flatten to 1D
     const flatTrue = yTrue.flatten();
     const flatPred = yPred.flatten();
-    const sortedTrue = tf.sort(flatTrue, 'asc');
-    const sortedPred = tf.sort(flatPred, 'asc');
+    
+    // Use topk to get all elements sorted (descending)
+    const sortedTrue = tf.topk(flatTrue, totalElements).values;
+    const sortedPred = tf.topk(flatPred, totalElements).values;
+    
+    // Calculate MSE on sorted values
     const loss = tf.losses.meanSquaredError(sortedTrue, sortedPred);
+    
+    // Cleanup
     flatTrue.dispose();
     flatPred.dispose();
     sortedTrue.dispose();
     sortedPred.dispose();
+    
     return loss;
 }
 
