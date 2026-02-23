@@ -1,13 +1,13 @@
 // ==========================================
-// THE GRADIENT PUZZLE — FIXED VERSION
+// GRADIENT PUZZLE — ACTUALLY WORKING
 // ==========================================
 
 const SIZE = 16;
 const SHAPE = [1, SIZE, SIZE, 1];
 
 const CONFIG = {
-  lr: 0.01,
-  autoSpeed: 30
+  lr: 0.02,
+  autoSpeed: 20
 };
 
 let state = {
@@ -28,21 +28,30 @@ function mse(a, b) {
   return tf.mean(tf.square(a.sub(b)));
 }
 
-// Histogram preservation (Sorted MSE)
-function sortedMSE(a, b) {
-  const aSorted = tf.sort(a.reshape([SIZE * SIZE]));
-  const bSorted = tf.sort(b.reshape([SIZE * SIZE]));
-  return mse(aSorted, bSorted);
+// ---- Differentiable Histogram Constraint ----
+// Preserve mean and variance instead of sorting
+function distributionLoss(x, y) {
+
+  const meanX = tf.mean(x);
+  const meanY = tf.mean(y);
+
+  const varX = tf.moments(x).variance;
+  const varY = tf.moments(y).variance;
+
+  const meanLoss = tf.square(meanX.sub(meanY));
+  const varLoss = tf.square(varX.sub(varY));
+
+  return meanLoss.add(varLoss);
 }
 
-// Smoothness (Total Variation X only)
+// Smoothness
 function smoothness(y) {
   const dx = y.slice([0, 0, 0, 0], [-1, -1, SIZE - 1, -1])
     .sub(y.slice([0, 0, 1, 0], [-1, -1, SIZE - 1, -1]));
   return tf.mean(tf.square(dx));
 }
 
-// Direction: left dark → right bright
+// Direction
 function directionX(y) {
   const mask = tf.linspace(-1, 1, SIZE)
     .reshape([1, 1, SIZE, 1]);
@@ -83,15 +92,15 @@ function studentLoss(x, y) {
   const λ1 = parseFloat(document.getElementById("smoothRange").value);
   const λ2 = parseFloat(document.getElementById("dirRange").value);
 
-  const lossHist = sortedMSE(x, y);
+  const lossDist = distributionLoss(x, y);
   const lossSmooth = smoothness(y).mul(λ1);
   const lossDir = directionX(y).mul(λ2);
 
-  return lossHist.add(lossSmooth).add(lossDir);
+  return lossDist.add(lossSmooth).add(lossDir);
 }
 
 // ==========================================
-// TRAINING
+// TRAIN STEP
 // ==========================================
 
 function trainStep() {
@@ -100,19 +109,15 @@ function trainStep() {
 
   tf.tidy(() => {
 
-    // Baseline
-    const baseGrads = tf.variableGrads(() => {
+    state.optBase.minimize(() => {
       const y = state.baseline.predict(state.x);
       return mse(state.x, y);
-    });
-    state.optBase.applyGradients(baseGrads.grads);
+    }, false, state.baseline.trainableWeights.map(w => w.val));
 
-    // Student
-    const studentGrads = tf.variableGrads(() => {
+    state.optStudent.minimize(() => {
       const y = state.student.predict(state.x);
       return studentLoss(state.x, y);
-    });
-    state.optStudent.applyGradients(studentGrads.grads);
+    }, false, state.student.trainableWeights.map(w => w.val));
 
   });
 
@@ -123,7 +128,7 @@ function trainStep() {
 }
 
 // ==========================================
-// CORRECT PIXEL SCALING (16x16 → 320x320)
+// SCALING FIX
 // ==========================================
 
 async function drawTensorScaled(tensor, canvas) {
@@ -138,11 +143,8 @@ async function drawTensorScaled(tensor, canvas) {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  ctx.drawImage(
-    temp,
-    0, 0, SIZE, SIZE,
-    0, 0, canvas.width, canvas.height
-  );
+  ctx.drawImage(temp, 0, 0, SIZE, SIZE,
+                0, 0, canvas.width, canvas.height);
 }
 
 async function render() {
