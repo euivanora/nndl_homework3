@@ -1,8 +1,9 @@
-// Конфигурация
+// app.js - ПОЛНОСТЬЮ РАБОЧАЯ ВЕРСИЯ
+// Версия: 2024-01-15-FIXED
+
 const IMG_SIZE = 16;
 const LEARNING_RATE = 0.01;
 
-// Глобальные переменные
 let inputTensor = null;
 let baselineModel = null;
 let studentModel = null;
@@ -12,7 +13,6 @@ let isAutoTraining = false;
 let stepCount = 0;
 let autoTrainId = null;
 
-// UI элементы
 const ui = {
     log: document.getElementById('logBox'),
     canvasInput: document.getElementById('canvasInput'),
@@ -28,21 +28,18 @@ const ui = {
     valDir: document.getElementById('valDir')
 };
 
-// Логирование
 function log(msg) {
     ui.log.innerHTML += `> ${msg}<br>`;
     ui.log.scrollTop = ui.log.scrollHeight;
     console.log(msg);
 }
 
-// Генерация шума
 function generateFixedNoise() {
     if (inputTensor) inputTensor.dispose();
     inputTensor = tf.randomUniform([1, IMG_SIZE, IMG_SIZE, 1]);
     log("Noise generated");
 }
 
-// Создание моделей
 function createBaselineModel() {
     const model = tf.sequential();
     model.add(tf.layers.flatten({inputShape: [IMG_SIZE, IMG_SIZE, 1]}));
@@ -91,30 +88,23 @@ function createModels() {
     log(`Models created: ${ui.selectArch.value}`);
 }
 
-// Функции потерь
 function mseLoss(yTrue, yPred) {
     return tf.losses.meanSquaredError(yTrue, yPred);
 }
 
-/**
- * FIXED: Using tf.topk instead of tf.sort (which doesn't exist in TF.js)
- * topk with k=all elements gives us sorted values
- */
+// ИСПРАВЛЕНО: используем tf.topk вместо tf.sort
 function sortedMseLoss(yTrue, yPred) {
     const totalElements = IMG_SIZE * IMG_SIZE;
     
-    // Flatten to 1D
     const flatTrue = yTrue.flatten();
     const flatPred = yPred.flatten();
     
-    // Use topk to get all elements sorted (descending)
+    // tf.topk возвращает отсортированные значения (по убыванию)
     const sortedTrue = tf.topk(flatTrue, totalElements).values;
     const sortedPred = tf.topk(flatPred, totalElements).values;
     
-    // Calculate MSE on sorted values
     const loss = tf.losses.meanSquaredError(sortedTrue, sortedPred);
     
-    // Cleanup
     flatTrue.dispose();
     flatPred.dispose();
     sortedTrue.dispose();
@@ -169,7 +159,6 @@ function calculateStudentLoss(yTrue, yPred) {
     return loss;
 }
 
-// Отрисовка
 function drawTensor(canvas, tensor) {
     const data = tensor.dataSync();
     const ctx = canvas.getContext('2d');
@@ -194,7 +183,6 @@ function drawTensor(canvas, tensor) {
     ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
 }
 
-// Обучение
 async function trainStep() {
     try {
         tf.tidy(() => {
@@ -263,7 +251,6 @@ function startAutoTrain() {
     loop();
 }
 
-// Инициализация
 async function init() {
     try {
         log("Loading TensorFlow.js...");
@@ -284,7 +271,6 @@ async function init() {
     }
 }
 
-// Обработчики событий
 ui.btnTrain.addEventListener('click', () => {
     trainStep();
     updateVisuals();
@@ -317,5 +303,4 @@ ui.selectArch.addEventListener('change', () => {
 ui.rangeSmooth.addEventListener('input', (e) => ui.valSmooth.textContent = e.target.value);
 ui.rangeDir.addEventListener('input', (e) => ui.valDir.textContent = e.target.value);
 
-// Запуск
 init();
