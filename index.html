@@ -1,200 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neural Network Design: The Gradient Puzzle</title>
-    <!-- TensorFlow.js CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <style>
-        :root {
-            --bg-color: #1a1a1a;
-            --panel-color: #2d2d2d;
-            --text-color: #e0e0e0;
-            --accent-color: #4caf50;
-            --highlight-color: #2196f3;
-            --danger-color: #f44336;
-        }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Neural Network Design: The Gradient Puzzle</title>
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
 
-        h1 { margin-bottom: 10px; font-weight: 300; }
-        .subtitle { color: #888; margin-bottom: 20px; font-size: 0.9rem; }
+<style>
+:root {
+  --bg: #141414;
+  --panel: #222;
+  --accent: #4caf50;
+  --blue: #2196f3;
+  --danger: #f44336;
+  --text: #e0e0e0;
+}
 
-        .container {
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-            width: 100%;
-            max-width: 1200px;
-        }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Segoe UI, sans-serif;
+  margin: 0;
+  padding: 20px;
+  text-align: center;
+}
 
-        /* Control Panel */
-        .controls {
-            background: var(--panel-color);
-            padding: 20px;
-            border-radius: 8px;
-            width: 300px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
+h1 { font-weight: 300; margin-bottom: 5px; }
+.subtitle { color: #888; margin-bottom: 20px; }
 
-        .control-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.85rem; color: #aaa; }
-        
-        button {
-            background-color: var(--accent-color);
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            width: 100%;
-            margin-bottom: 8px;
-            font-weight: bold;
-            transition: opacity 0.2s;
-        }
-        button:hover { opacity: 0.9; }
-        button.secondary { background-color: #555; }
-        button.danger { background-color: var(--danger-color); }
+.container {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
 
-        input[type="range"] { width: 100%; }
-        
-        .log-box {
-            background: #000;
-            color: #0f0;
-            font-family: 'Courier New', monospace;
-            padding: 10px;
-            height: 150px;
-            overflow-y: auto;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            border: 1px solid #333;
-        }
+.controls {
+  width: 320px;
+  background: var(--panel);
+  padding: 20px;
+  border-radius: 8px;
+}
 
-        /* Visualization Area */
-        .viz-area {
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
+button {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}
 
-        .canvas-card {
-            background: var(--panel-color);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
+.primary { background: var(--accent); color: white; }
+.secondary { background: #555; color: white; }
+.danger { background: var(--danger); color: white; }
 
-        canvas {
-            border: 2px solid #444;
-            image-rendering: pixelated;
-            background: #000;
-            margin-top: 10px;
-        }
+select, input[type=range] {
+  width: 100%;
+  margin-bottom: 10px;
+}
 
-        .card-title { font-weight: bold; margin-bottom: 5px; color: var(--highlight-color); }
-        .card-desc { font-size: 0.8rem; color: #888; margin-bottom: 10px; }
+.log {
+  background: black;
+  color: #0f0;
+  font-family: monospace;
+  font-size: 0.8rem;
+  height: 140px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 4px;
+  text-align: left;
+}
 
-        .todo-badge {
-            background: #ff9800;
-            color: #000;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: bold;
-            margin-left: 5px;
-        }
-        
-        select {
-            width: 100%;
-            padding: 8px;
-            background: #444;
-            color: white;
-            border: none;
-            border-radius: 4px;
-        }
-    </style>
+.canvas-area {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.card {
+  background: var(--panel);
+  padding: 15px;
+  border-radius: 8px;
+}
+
+canvas {
+  border: 2px solid #444;
+  image-rendering: pixelated;
+  background: black;
+}
+</style>
 </head>
+
 <body>
 
-    <h1>Neural Network Design: The Gradient Puzzle</h1>
-    <div class="subtitle">Transforming Noise into Structure via Custom Loss Functions</div>
+<h1>Neural Network Design: The Gradient Puzzle</h1>
+<div class="subtitle">
+Mission: Rearrange Noise into a Gradient (Sliding Puzzle, No New Colors)
+</div>
 
-    <div class="container">
-        
-        <!-- Controls -->
-        <div class="controls">
-            <div class="control-group">
-                <label>Training Controls</label>
-                <button id="btnTrainStep">Train 1 Step</button>
-                <button id="btnAutoTrain" class="secondary">Auto Train (Start)</button>
-                <button id="btnReset" class="danger">Reset Weights</button>
-            </div>
+<div class="container">
 
-            <div class="control-group">
-                <label>Architecture (Projection Type)</label>
-                <select id="selectArch">
-                    <option value="compression">Compression (Bottleneck)</option>
-                    <option value="transformation">Transformation (Same Size)</option>
-                    <option value="expansion">Expansion (Wide)</option>
-                </select>
-            </div>
+<div class="controls">
 
-            <div class="control-group">
-                <label>Loss Weights (Level 3)</label>
-                <label>Smoothness (λ₁): <span id="valSmooth">0.0</span></label>
-                <input type="range" id="rangeSmooth" min="0" max="10" step="0.1" value="0">
-                
-                <label>Direction (λ₂): <span id="valDir">0.0</span></label>
-                <input type="range" id="rangeDir" min="0" max="10" step="0.1" value="0">
-            </div>
+<button id="btnTrain" class="primary">Train 1 Step</button>
+<button id="btnAuto" class="secondary">Auto Train (Start)</button>
+<button id="btnReset" class="danger">Reset Weights</button>
 
-            <div class="log-box" id="logBox">
-                > System Ready...<br>
-                > Waiting for input...
-            </div>
-        </div>
+<label>Projection Type (Student Model)</label>
+<select id="archSelect">
+<option value="compression">Compression</option>
+<option value="transformation" selected>Transformation (Mission Mode)</option>
+<option value="expansion">Expansion</option>
+</select>
 
-        <!-- Visualizations -->
-        <div class="viz-area">
-            
-            <!-- Input -->
-            <div class="canvas-card">
-                <div class="card-title">Input (Fixed Noise)</div>
-                <div class="card-desc">The raw material. Random values.</div>
-                <canvas id="canvasInput" width="160" height="160"></canvas>
-            </div>
+<label>Smoothness λ₁: <span id="valSmooth">0</span></label>
+<input type="range" id="smoothRange" min="0" max="2" step="0.05" value="0">
 
-            <!-- Baseline -->
-            <div class="canvas-card">
-                <div class="card-title">Baseline (MSE Only)</div>
-                <div class="card-desc">Level 1: Identity Mapping.<br>It just copies the noise.</div>
-                <canvas id="canvasBaseline" width="160" height="160"></canvas>
-            </div>
+<label>Direction λ₂: <span id="valDir">0</span></label>
+<input type="range" id="dirRange" min="0" max="2" step="0.05" value="0">
 
-            <!-- Student -->
-            <div class="canvas-card">
-                <div class="card-title">Student Model <span class="todo-badge">TODO</span></div>
-                <div class="card-desc">Level 2/3: Custom Loss.<br>Rearrange pixels to form a gradient.</div>
-                <canvas id="canvasStudent" width="160" height="160"></canvas>
-            </div>
+<div class="log" id="log"></div>
 
-        </div>
-    </div>
+</div>
 
-    <!-- Подключаем ИСПРАВЛЕННЫЙ файл app.js -->
-    <script src="app.js"></script>
+<div class="canvas-area">
+
+<div class="card">
+<div>Input (Fixed Noise)</div>
+<canvas id="inputCanvas" width="160" height="160"></canvas>
+</div>
+
+<div class="card">
+<div>Baseline (MSE Only)</div>
+<canvas id="baseCanvas" width="160" height="160"></canvas>
+</div>
+
+<div class="card">
+<div>Student (Custom Intent)</div>
+<canvas id="studentCanvas" width="160" height="160"></canvas>
+</div>
+
+</div>
+</div>
+
+<script src="app.js"></script>
 </body>
 </html>
